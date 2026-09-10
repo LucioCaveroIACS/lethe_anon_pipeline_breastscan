@@ -55,14 +55,17 @@ def copy_and_organize(
     msg = "Copied and organized hierarchically" if restructure else "Copied"
     logger.info(f"{msg} {cnt} DICOM files")
 
-def process_single_file(file_path: str, input_folder: Path, output_folder: Path, restructure: bool):
+def process_single_file(file_path: str, input_folder: Path, output_folder: Path, restructure: bool, plain_dir: bool = False, file_number: int | None = None):
     """Worker function to process and copy a single DICOM file."""
     try:
         # Read metadata
         ds = dcmread(file_path, stop_before_pixels=True)
         
         # Determine destination
-        if restructure:
+        if plain_dir:
+            dest_dir = output_folder
+            dest_file = dest_dir / f"{file_number}.dcm"
+        elif restructure:
             dest_dir = (
                 output_folder / 
                 str(ds.PatientID) / 
@@ -90,7 +93,8 @@ def copy_and_organize_parallel(
     input_folder: Path,
     output_folder: Path,
     restructure: bool = True,
-    threads: int = 10
+    threads: int = 10,
+    plain_dir: bool = False,
 ):
     # 1. Collect all file paths first
     all_files = []
@@ -103,8 +107,9 @@ def copy_and_organize_parallel(
     with ThreadPoolExecutor(max_workers=threads) as executor:
         # Map the worker function across all files
         results = list(executor.map(
-            lambda f: process_single_file(f, input_folder, output_folder, restructure),
-            all_files
+            lambda f, idx: process_single_file(f, input_folder, output_folder, restructure, plain_dir=plain_dir, file_number=idx+1),
+            all_files,
+            range(len(all_files))
         ))
         cnt = sum(1 for r in results if r)
 

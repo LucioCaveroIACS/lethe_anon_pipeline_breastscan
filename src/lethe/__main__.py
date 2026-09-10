@@ -68,6 +68,7 @@ class Settings(BaseModel):
 
     threads: int = DEFAULT_CPU_THREADS
     hierarchical: bool = True
+    plain_dir: bool = False
     verbose: bool = False
     version: bool | None = None
     pseudonym_prefix: str = "{site_id}_"
@@ -453,6 +454,17 @@ def run(
             )
         )
     ] = None,
+    plain_dir: Annotated[
+        bool | None, 
+        typer.Option(
+        "--plain-dir/--no-plain-dir",
+            help=(
+                "Output DICOM files flat as 1.dcm, 2.dcm, ... "
+                "without the Patient / Study / Series hierarchy. "
+                "Set to FALSE by default."
+            )
+        )
+    ] = None,
     verbose: Annotated[
         bool | None, 
         typer.Option(
@@ -499,6 +511,7 @@ def run(
         "paddle_ocr": paddle_ocr,
         "threads":threads,
         "hierarchical":hierarchical,
+        "plain_dir":plain_dir,
         "verbose": verbose,
         "version":version,
         "pseudonym_prefix":pseudonym_prefix,
@@ -517,6 +530,7 @@ def run(
     paddle_ocr = settings.paddle_ocr
     threads = settings.threads
     hierarchical = settings.hierarchical
+    plain_dir = settings.plain_dir
     verbose = settings.verbose
     version = settings.version
     pseudonym_prefix = settings.pseudonym_prefix
@@ -610,7 +624,7 @@ def run(
     if input_dir_images != output_dir:
         logger.info("Copying and reorganizing files.")
         #copy_and_organize(input_dir_images, output_dir, restructure=hierarchical)
-        copy_and_organize_parallel(input_dir_images, output_dir, restructure=hierarchical, threads = threads) # Version with parallelization
+        copy_and_organize_parallel(input_dir_images, output_dir, restructure=hierarchical, threads = threads, plain_dir = plain_dir) # Version with parallelization
 
     # Step 5: Hash any clinical CSVs found in the input directory:
     if bscan_dcm_deidentify:
