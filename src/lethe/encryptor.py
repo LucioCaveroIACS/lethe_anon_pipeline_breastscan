@@ -1,64 +1,62 @@
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.primitives import padding
-from cryptography.hazmat.backends import default_backend
+import hmac
 from hashlib import sha256
 
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives import padding
+
+
 class IdentifierEncryptor:
-    def __init__(self, site_id: str, project_id: str):
+    def __init__(self, site_id: str, master_key: str):
         """
-        Deterministically derive 32-byte key and 16-byte IV
-        AES-CBC will use a combined key and an Init Vec -IV.
+        Port of the BREASTSCAN encryption scheme (originally a Lua function
+        using openssl.cipher / openssl.hmac).
+
+        Key material is derived from the master key (the secret) via HMAC-SHA256:
+          k_enc = HMAC(master_key, "enc_key")
+          k_mac = HMAC(master_key, "mac_key")
+          k_iv  = HMAC(master_key, "iv_key")
+
+        The site_id argument is kept for interface compatibility with the
+        existing pipeline but plays no role in the encryption itself.
         """
+        self._master_key = master_key.encode()
+        self._k_enc = self._hmac(self._master_key, b"enc_key")
+        self._k_mac = self._hmac(self._master_key, b"mac_key")
+        self._k_iv = self._hmac(self._master_key, b"iv_key")
 
-        # 1. Derive the AES-256 Key (32 bytes)
-        # We combine Site and Project IDs to ensure the key is unique to both.
-        combined_key_seed = f"{site_id}{project_id}".encode()
-        self.key = sha256(combined_key_seed).digest()
-
-        # 2. Derive the IV (16 bytes)
-        # We use the Project ID alone so that the 'starting point' 
-        # is consistent for all files within the same project.
-        iv_seed = project_id.encode()
-        self.iv = sha256(iv_seed).digest()[:16]
-
-        self.backend = default_backend()
+    @staticmethod
+    def _hmac(key: bytes, msg: bytes) -> bytes:
+        return hmac.new(key, msg, sha256).digest()
 
     def encrypt(self, identifier: str) -> bytes:
-        # 1. Ensure input is within bounds
-        #if not (8 <= len(identifier) <= 32):
-        #    raise ValueError("Ids must be between 8 and 32 char.")
-        if not (len(identifier) <= 32):
-            raise ValueError("Ids must have 32 characters or less.")
+        plaintext = identifier.encode()
 
+        iv = self._hmac(self._k_iv, plaintext)[:16]
 
-       # 2. Setup Padder (Ensures output is exactly 32 bytes)
-        # To force exactly 32 bytes output for a 32-byte input, 
-        # we must handle the block size strictly.
         padder = padding.PKCS7(128).padder()
-        padded_data = ( padder.update(identifier.encode()) 
-                      + padder.finalize()
-        )
+        padded_data = padder.update(plaintext) + padder.finalize()
 
-        # 3. Encrypt
-        cipher = Cipher(algorithms.AES(self.key), modes.CBC(self.iv), 
-                 backend=self.backend
-        )
+        cipher = Cipher(algorithms.AES(self._k_enc), modes.CBC(iv))
         encryptor = cipher.encryptor()
-        return encryptor.update(padded_data) + encryptor.finalize()
-    #   return encrypted_bytes.hex()[:64]
+        ciphertext = encryptor.update(padded_data) + encryptor.finalize()
+
+        signature = self._hmac(self._k_mac, iv + ciphertext)
+
+        return signature + iv + ciphertext
 
     def decrypt(self, encrypted_data: bytes) -> str:
-        # 1. Decrypt
-        cipher = Cipher(algorithms.AES(self.key), 
-                 modes.CBC(self.iv), 
-                 backend=self.backend
-        )
-        decryptor = cipher.decryptor()
-        padded_data = ( decryptor.update(encrypted_data)
-                      + decryptor.finalize()
-        )
+        signature = encrypted_data[:32]
+        iv = encrypted_data[32:48]
+        ciphertext = encrypted_data[48:]
 
-        # 2. Unpad
-        unpader = padding.PKCS7(128).unpadder()
-        data = unpader.update(padded_data) + unpader.finalize()
+        expected = self._hmac(self._k_mac, iv + ciphertext)
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError("MAC verification failed")
+
+        cipher = Cipher(algorithms.AES(self._k_enc), modes.CBC(iv))
+        decryptor = cipher.decryptor()
+        padded_data = decryptor.update(ciphertext) + decryptor.finalize()
+
+        unpadder = padding.PKCS7(128).unpadder()
+        data = unpadder.update(padded_data) + unpadder.finalize()
         return data.decode()
